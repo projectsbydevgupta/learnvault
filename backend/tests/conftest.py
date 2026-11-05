@@ -109,3 +109,12 @@ def qdrant_test_client(monkeypatch):
 
         monkeypatch.setattr(q_svc, "get_qdrant_client", _mock_get_client)
 
+@pytest.fixture(autouse=True)
+def hermetic_storage_client(monkeypatch):
+    """
+    Ensure general unit tests run hermetically with local storage unless
+    explicitly patched with Supabase mocks (e.g. in test_supabase_storage.py).
+    """
+    import app.api.documents as doc_api
+    monkeypatch.setattr(doc_api, "is_supabase_configured", lambda: False)
+

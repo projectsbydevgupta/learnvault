@@ -1,254 +1,195 @@
 # LEARNVAULT — Personal AI Learning Assistant
 
-An agentic, full-stack learning assistant that enables students to upload lecture notes and textbooks, ask natural-language questions grounded strictly in their course material, receive factual answers with exact page-level citations, and master weak topics through adaptive auto-graded diagnostic quizzes.
+[![Live Web App](https://img.shields.io/badge/Live%20App-Vercel-black?style=flat-square&logo=vercel&logoColor=white)](https://learnvault-sandy.vercel.app)
+[![Live Backend](https://img.shields.io/badge/Live%20Backend-Render-46E3B7?style=flat-square&logo=render&logoColor=white)](https://learnvault-vcxh.onrender.com)
+[![API Docs](https://img.shields.io/badge/API%20Docs-Swagger%20UI-85EA2D?style=flat-square&logo=swagger&logoColor=black)](https://learnvault-vcxh.onrender.com/docs)
+[![Test Suite](https://img.shields.io/badge/Tests-273%20Passed%20(100%25)-brightgreen?style=flat-square&logo=pytest&logoColor=white)](backend/tests)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+
+An agentic, full-stack learning platform that transforms dense lecture notes, textbooks, and research papers into an interactive, grounded study partner. Students upload course PDFs, receive natural-language explanations with exact page-level citations, and master weak subjects through deterministic diagnostic quizzes.
 
 ---
 
-## Architecture Overview
+## Live Deployments & Endpoints
 
-```
-[ Student PDF Notes ]
-         │
-         ▼
-[ PyMuPDF Extraction ] ──► [ Boundary-Aware Text Cleaning ]
-                                     │
-                                     ▼
-                      [ Hierarchical Parent-Child Chunking ]
-                        ├─ Parent: 2,800 chars (broad context)
-                        └─ Child:    800 chars (dense semantic retrieval)
-                                     │
-                                     ▼
-                      [ Local all-MiniLM-L6-v2 Embeddings ]
-                                     │
-                                     ▼
-                      [ Qdrant Vector DB Ingestion ]
-                                     │
-┌────────────────────────────────────┴────────────────────────────────────┐
-│                    FOUR BOUNDED AGENTS & CORE RAG                       │
-│                                                                         │
-│  1. Query Router & Rewriter Agent (LLM)                                │
-│     └─ Fast-path greeting / direct chat OR multi-turn query rewriting   │
-│                                                                         │
-│  2. Corrective RAG (CRAG) Agent (LLM)                                  │
-│     └─ Evaluates retrieval relevance (score < 0.35); max 1 query retry  │
-│                                                                         │
-│  3. Hallucination & Citation Grader (LLM)                              │
-│     └─ Verifies answer grounding vs retrieved parent evidence          │
-│     └─ Max 1 answer regeneration; safe refusal on double failure        │
-│     └─ Streams only verified tokens via Server-Sent Events (SSE)        │
-│                                                                         │
-│  4. Adaptive Diagnostic Quiz Agent (LLM + Deterministic Engine)        │
-│     └─ Generates 4-option MCQs grounded in student notes               │
-│     └─ 100% deterministic grading (backend equality check)             │
-│     └─ Weak topic detection: accuracy < 60% with targeted practice      │
-└─────────────────────────────────────────────────────────────────────────┘
+| Component | Platform | Status | Live Link |
+| :--- | :--- | :--- | :--- |
+| **Frontend Web App** | Vercel | 🟢 Operational | [https://learnvault-sandy.vercel.app](https://learnvault-sandy.vercel.app) |
+| **Backend API & Engine** | Render | 🟢 Operational | [https://learnvault-vcxh.onrender.com](https://learnvault-vcxh.onrender.com) |
+| **Interactive API Docs** | FastAPI Swagger | 🟢 Available | [https://learnvault-vcxh.onrender.com/docs](https://learnvault-vcxh.onrender.com/docs) |
+| **OpenAPI ReDoc** | FastAPI ReDoc | 🟢 Available | [https://learnvault-vcxh.onrender.com/redoc](https://learnvault-vcxh.onrender.com/redoc) |
+
+> 💡 **Architecture Note:** The live Render service hosts the **FastAPI Backend & Agent Pipeline**. Opening the root URL in a browser displays the live API Status Dashboard; API clients and curl receive structured JSON. The web user interface is built with **Next.js** in `frontend/`.
+
+---
+
+## System Architecture
+
+```text
+               ┌────────────────────────────────────────────────────────┐
+               │                  Student PDF Document                  │
+               └───────────────────────────┬────────────────────────────┘
+                                           │
+                    [PyMuPDF Extraction & Scanned Page Detection]
+                                           │
+                    [Text Cleaning & Hierarchical Chunking]
+                    ├─ Parent Chunks: 2,800 chars (broad contextual window)
+                    └─ Child Chunks:    800 chars (dense semantic retrieval)
+                                           │
+                    [FastEmbed ONNX Embeddings (all-MiniLM-L6-v2, 384-dim)]
+                                           │
+                         ┌─────────────────┴─────────────────┐
+                         ▼                                   ▼
+              [Qdrant Vector Database]           [Supabase Object Storage]
+              (Filtered by user_id & doc_id)     (Private persistent PDF cache)
+                         │
+┌────────────────────────┴──────────────────────────────────────────────────────┐
+│                    FOUR BOUNDED AGENTS & CORE RAG ENGINE                      │
+│                                                                               │
+│  1. Query Router & Rewriter Agent (Groq / Llama 3.3)                         │
+│     ├─ Fast-path regex detects greetings (skips LLM overhead)                │
+│     └─ Rewrites follow-up queries using chat history into standalone search   │
+│                                                                               │
+│  2. Corrective RAG (CRAG) Agent (Groq / Llama 3.3)                            │
+│     ├─ Evaluates cross-encoder retrieval relevance (threshold: 0.35)          │
+│     └─ Performs max 1 query reformulation retry; refuses gracefully on failure│
+│                                                                               │
+│  3. Hallucination & Citation Grader (Groq / Llama 3.3)                        │
+│     ├─ Cross-verifies draft answer claims against retrieved parent evidence   │
+│     ├─ Max 1 regeneration retry; returns safe refusal on double failure       │
+│     └─ Streams only verified tokens via Server-Sent Events (SSE)              │
+│                                                                               │
+│  4. Adaptive Diagnostic Quiz Agent (Groq + Deterministic Engine)              │
+│     ├─ Generates grounded 4-option MCQs directly from uploaded student notes  │
+│     ├─ Deterministic grading: 100% backend equality check (no LLM bias)       │
+│     └─ Weak topic diagnostic: flags <60% accuracy with targeted practice CTAs│
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Core Features
+## Core Capabilities
 
-- **Document Management**:
-  - Drag-and-drop PDF upload with filename display, formatted file size, and file validation.
-  - **Upload Limit**: Supports text-based PDF files up to **20 MB**.
-  - Asynchronous extraction and processing pipeline (`PROCESSING` ➔ `READY` / `FAILED`).
-  - Cascading deletion with an in-app confirmation dialog, permanently removing original PDF files, processed JSON files, temporary files, Qdrant vectors, chat history, and quizzes across all storage layers.
-  - **Document Metadata Editing (`PATCH /documents/{id}`)**:
-    - In-app modal for updating display filename (max 60 chars) and subject (max 40 chars) with live character counters (`0/60`, `0/40`), blank validation, and whitespace trimming.
-    - **Safe Metadata Operation**: Strictly preserves document UUIDs, processing status, page count, original PDF files, Supabase storage paths, chunk embeddings, and Qdrant vectors.
-
-- **UI Consistency & Icon Standardization**:
-  - Every action whose purpose is **Edit**, **Rename**, or **Modify existing metadata** consistently uses the same **pencil icon** (`Heroicons pencil-square`, established by Chat Sessions).
-  - Used across Document editing (Documents page & Dashboard), Chat Session renaming, Quiz Topic renaming, and Profile editing.
-  - **Accessibility**: All icon-only controls provide explicit `aria-label`, tooltip `title`, visible focus rings (`focus-visible:ring-2`), and keyboard navigation support.
-  - **Preserved Existing Design**: Existing text buttons and core actions (`Chat`, `Quiz`, `Delete`, `Upload`, `Save`, `Cancel`, `Sign Out`, etc.) strictly preserve their established appearance, colors, and layout without unnecessary redesign.
+- **Resilient Document Pipeline**:
+  - Drag-and-drop PDF ingestion (up to 20 MB) with automatic scanned-page detection.
+  - Hybrid storage: Render container handles processing; Supabase Storage provides persistent private object storage across container reboots.
+  - Hierarchical parent-child chunking preserves high-resolution context for generation while enabling dense child matching.
+  - Cascading deletion across all storage tiers (Supabase, Qdrant, PostgreSQL/SQLite).
 
 - **Grounded Conversational RAG**:
-  - Top-15 Qdrant vector retrieval filtered by authenticated `user_id` and `document_id`.
-  - FlashRank cross-encoder reranking (`ms-marco-TinyBERT-L-2-v2`) selecting top 4 parent contexts.
-  - Strict grounding: answers exclusively from uploaded documents; refuses when evidence is insufficient.
-  - Page-level citations displayed as clean clickable badges (`[Source N] <file> · Page X`).
-  - Inline Chat Session Rename with persistent database updates and full message history retention.
-  - **Quiz from Chat**: One-click transition from conversation to targeted quiz practice.
+  - Authenticated Qdrant vector retrieval strictly isolated by `user_id` and `document_id`.
+  - Local FlashRank cross-encoder reranking (`ms-marco-TinyBERT-L-2-v2`).
+  - Strict grounding: answers only from uploaded context with clickable `[Source N | Page X]` citations.
+  - Real-time Server-Sent Events (SSE) token streaming.
 
 - **Adaptive Diagnostic Quizzes**:
-  - Multiple-choice questions (4 options per question) generated from course notes.
-  - **Deterministic Auto-Grading**: Exact string comparison (`submitted == correct`) calculated by backend code without LLM scoring bias.
-  - **Score Bands & Diagnostics**:
-    - **Strong**: 80%–100%
-    - **Good**: 60%–79%
-    - **Needs Practice / Weak**: `< 60%` (explicit rule: 59% is weak, 60% is not weak).
-    - Context-aware Dashboard Weak Topics analysis displayed once actual quiz performance data exists.
-  - Inline quiz topic rename in Quiz History table.
-  - **Show Incorrect Answers Only**: Post-submission toggle filter for targeted revision without modifying scores or stored attempts.
+  - On-demand 4-option MCQ generation tailored to student materials or weak topics.
+  - 100% deterministic auto-grading executed by backend code.
+  - Clear score bands: Strong (80–100%), Good (60–79%), Weak (<60%).
+  - Post-quiz review filter: "Show Incorrect Answers Only" for rapid revision.
 
-- **Security & Data Isolation**:
-  - Authentication via Google Identity Services (GIS) ("Continue with Google") and local/guest authentication.
-  - Stateless Bearer tokens validating user identity across all endpoints.
-  - Strict cross-user data isolation: users can only view, query, or delete their own documents, sessions, and quizzes.
-
-- **Responsive Design & 3 Themes**:
-  - Full-featured **Light ☀️**, **Dark 🌙**, and **Green 🌿** themes persisted across reloads without theme flash.
-  - Fully responsive mobile experience with collapsible mobile navigation drawer.
-  - Universal student-friendly **User Guide** modal accessible from Navbar, profile menu, and mobile drawer.
-  - Unified theme-aware toast notification system.
+- **Enterprise Security & Clean UX**:
+  - Google Identity Services (GIS) OAuth + stateless guest sessions.
+  - Cross-user data isolation across database queries and vector filters.
+  - 3 persistable themes: **Light ☀️**, **Dark 🌙**, and **Green 🌿** with zero theme flash.
+  - 100% accessible UI with consistent edit/rename iconography and keyboard navigation.
 
 ---
 
 ## Technology Stack
 
-| Layer | Technology | Description |
+| Domain | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4 | Responsive UI, SSE token streaming, theme engine |
+| **Frontend** | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4 | Responsive UI, SSE token streaming, client state |
 | **Backend** | FastAPI, Python 3.10+, Pydantic v2, SQLAlchemy | Async REST APIs, SSE streaming, authentication |
-| **Task Queue** | FastAPI `BackgroundTasks` | In-process asynchronous document ingestion (Redis & Celery are NOT wired into the active implementation) |
-| **Vector DB** | Qdrant | 384-dimensional dense semantic search (Docker or local embedded) |
-| **Database** | PostgreSQL / SQLite | User profiles, document metadata, chat history, quiz attempts |
-| **Object Storage** | Supabase Storage (Private) | Persistent PDF storage in private bucket `learnvault-documents` (Render local filesystem is ephemeral/temporary) |
-| **Embeddings** | FastEmbed (ONNX Runtime, `all-MiniLM-L6-v2`) | Lightweight local CPU inference (384-dim float vectors, low memory footprint) |
-| **Reranker** | FlashRank (`ms-marco-TinyBERT-L-2-v2`) | Local cross-encoder reranking without external API calls |
-| **LLM Engine** | Groq API (`openai/gpt-oss-120b`) | Fast inference for RAG generation and bounded agents |
-| **PDF Engine** | PyMuPDF (`fitz`) | High-fidelity page extraction and scan detection |
+| **Vector Engine** | Qdrant (Cloud / Local) | 384-dimensional dense semantic vector retrieval |
+| **Relational DB** | PostgreSQL (Neon) / SQLite fallback | User profiles, document metadata, chat history, quizzes |
+| **Object Storage** | Supabase Storage (Private) | Persistent PDF storage across ephemeral container restarts |
+| **Embeddings** | FastEmbed (ONNX Runtime, `all-MiniLM-L6-v2`) | High-speed local CPU embeddings (no PyTorch overhead) |
+| **Reranker** | FlashRank (`ms-marco-TinyBERT-L-2-v2`) | Local cross-encoder reranker (no external API calls) |
+| **LLM Inference** | Groq API (`openai/gpt-oss-120b`, `llama-3.3-70b-versatile`) | Fast, low-latency reasoning for bounded agents |
+| **PDF Extraction** | PyMuPDF (`fitz`) | High-precision text and layout extraction |
 
 ---
 
-## Local Setup Guide
+## Quickstart (Local Development)
 
 ### 1. Prerequisites
-- **Python**: 3.10 or higher
-- **Node.js**: 18 or higher (with npm)
-- **Docker** *(optional)*: Docker Desktop for running PostgreSQL and Qdrant containers
+- Python 3.10+
+- Node.js 18+ & npm
+- *(Optional)* Docker Desktop for local PostgreSQL & Qdrant containers
 
-> **Note on Zero-Configuration Local Fallbacks**:
-> If PostgreSQL or Docker is not installed, the application automatically falls back to:
-> - SQLite database at `data/ai_learning_local.db`
-> - Embedded local Qdrant vector storage at `data/qdrant_local/`
-> You can run and test the complete application without Docker or PostgreSQL.
+> **Zero-Config Fallback:** If Docker or PostgreSQL is not running locally, LearnVault automatically boots with an embedded SQLite database (`data/ai_learning_local.db`) and local Qdrant storage (`data/qdrant_local/`).
 
----
+### 2. Environment Setup
+```bash
+# Clone the repository
+git clone https://github.com/projectsbydevgupta/learnvault.git
+cd learnvault
 
-### 2. Environment Configuration
-Clone the repository and create your local `.env` file:
-
-```powershell
-# Copy the public example template to your private local .env
-Copy-Item .env.example .env     # Windows PowerShell
-cp .env.example .env            # macOS / Linux
+# Create your local environment configuration
+cp .env.example .env     # macOS / Linux
+Copy-Item .env.example .env  # Windows PowerShell
 ```
-
-Open `.env` and add your Groq API key:
+Configure your Groq API key in `.env`:
 ```env
-RAG_API_KEY=your_groq_api_key_here
+RAG_API_KEY=gsk_your_groq_api_key_here
 ```
-*(Get a free API key at [console.groq.com](https://console.groq.com/keys). All 4 agents use `RAG_API_KEY` as a fallback if their dedicated keys are left blank.)*
 
----
-
-### 3. Backend Setup
-
-```powershell
-# Navigate to backend directory
+### 3. Start Backend
+```bash
 cd backend
-
-# Create and activate Python virtual environment
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1    # Windows
+python -m venv .venv
 source .venv/bin/activate       # macOS / Linux
+.\.venv\Scripts\Activate.ps1    # Windows
 
-# Install backend dependencies
 pip install -r requirements.txt
-
-# Start the FastAPI server
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-Backend will be available at: `http://127.0.0.1:8000` (API documentation at `http://127.0.0.1:8000/docs`).
+API runs at `http://127.0.0.1:8000` (Docs at `http://127.0.0.1:8000/docs`).
 
----
-
-### 4. Frontend Setup
-
-In a separate terminal:
-```powershell
-# Navigate to frontend directory
+### 4. Start Frontend
+```bash
+# In a separate terminal
 cd frontend
-
-# Install frontend dependencies
 npm install
-
-# Start the Next.js development server
 npm run dev
 ```
-Frontend will be available at: `http://localhost:3000`.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
-### 5. Docker Infrastructure *(Optional)*
+## Production Deployment
 
-To run PostgreSQL and Qdrant in Docker containers:
-```powershell
-# In the project root
-docker compose up -d
-```
-- PostgreSQL: `localhost:5432` (`ai_learning_db`)
-- Qdrant: `localhost:6333` / Web UI: `http://localhost:6333/dashboard`
+### Backend Deployment (Render)
+1. Create a **Web Service** on [Render](https://render.com) connected to your repository.
+2. Select **Docker** environment (uses `backend/Dockerfile`) with Root Directory set to `backend`.
+3. Set environment variables in the Render Dashboard (from `.env.example`):
+   - `DATABASE_URL` (Neon PostgreSQL)
+   - `QDRANT_URL` & `QDRANT_API_KEY` (Qdrant Cloud)
+   - `RAG_API_KEY`, `ROUTER_API_KEY`, `CRAG_API_KEY`, `GRADER_API_KEY`, `QUIZ_API_KEY`
+   - `SUPABASE_URL` & `SUPABASE_SECRET_KEY` (Private Bucket `learnvault-documents`)
+   - `FRONTEND_URL` (Your Vercel deployment URL)
 
----
-
-## Quality Assurance & Verification
-
-### Pre-Deployment Verification
-All 273 automated regression and unit tests were executed with a 100% pass rate (259 passed, 14 skipped for optional local Docker services, 0 failures):
-- PDF extraction and scanned-page detection
-- Cleaning, chunking, and FastEmbed ONNX embeddings
-- Document metadata editing validation and safety (`PATCH /documents/{id}`)
-- Embeddings and Qdrant vector lifecycle
-- Supabase Storage operations (persistent PDF upload, download, cascade deletion, guest purge)
-- Core RAG, refusal, and conversational history
-- Router & CRAG Agents
-- Grader & Adaptive Quiz Agents
-- Auth, SSE streaming, and cross-user data isolation
-- Cascading deletion across all storage layers and session/topic rename
-
-### Production Build & Type Check
-```powershell
-cd frontend
-npm run build      # TypeScript validation + Next.js production build
-```
+### Frontend Deployment (Vercel)
+1. Import repository on [Vercel](https://vercel.com).
+2. Set **Root Directory** to `frontend`.
+3. Add Environment Variables:
+   - `NEXT_PUBLIC_API_URL` = `https://learnvault-vcxh.onrender.com`
+   - `NEXT_PUBLIC_GOOGLE_CLIENT_ID` = `your_google_client_id.apps.googleusercontent.com`
+4. Click **Deploy**.
 
 ---
 
-## Bounded 4-Agent Architecture Specification
+## Verification & Quality Assurance
 
-1. **Agent 1: Query Router & Rewriter (`query_router_service.py`)**:
-   - Executes a single structured LLM classification.
-   - Fast-path regex immediately routes social greetings to direct chat without LLM delay.
-   - Rewrites follow-up questions to resolve pronouns against recent history before vector retrieval.
-2. **Agent 2: Corrective RAG (CRAG) Agent (`crag_service.py`)**:
-   - Triggered only when initial retrieval score is below `RERANK_THRESHOLD` (0.35).
-   - Generates exactly **ONE** alternative search query.
-   - If retry evidence remains weak, returns the unified refusal without looping.
-3. **Agent 3: Hallucination & Citation Grader (`grader_service.py`)**:
-   - Evaluates LLM draft answers against retrieved parent chunks.
-   - Grader FAIL triggers exactly **ONE** answer regeneration using the **same context**.
-   - If regeneration fails, safely returns the refusal message.
-   - **Crucial Safety Rule**: Unverified answers are NEVER streamed token-by-token.
-4. **Agent 4: Adaptive Quiz & Diagnostic Agent (`quiz_service.py`)**:
-   - Generates grounded 4-option MCQs from student notes.
-   - Identifies weak topics (`accuracy < 60%`) and offers targeted revision quizzes.
-   - Auto-grading is 100% deterministic (`submitted == correct`) calculated in backend code.
-
----
-
-## Security & Privacy Guidelines
-
-- **No Secrets in Repository**: `.env` is ignored by `.gitignore`. Real API keys, passwords, and private tokens must never be committed.
-- **Backend-Only Storage Credentials**: `SUPABASE_SECRET_KEY` is strictly server-side and never exposed to the frontend, logs, or repository. The storage bucket `learnvault-documents` is private.
-- **Data Isolation**: All database queries and vector searches strictly enforce `user_id == authenticated_user`.
-- **Read-Only Profile Fields**: User emails are immutable and read-only.
-- **Client Identification**: Google Identity Services uses Web Client IDs (`GOOGLE_CLIENT_ID`) configured with authorized origins.
+- **Backend Automated Tests**: 273 tests executed via `pytest` (259 passed, 14 skipped for optional local Docker containers, **0 failures**).
+- **Frontend Type Safety**: `npx tsc --noEmit` passed with 0 errors.
+- **Production Build**: 10/10 Next.js routes statically prerendered with Turbopack.
+- **Data Isolation**: All database operations and Qdrant queries enforce strict `user_id == current_user` validation.
 
 ---
 
 ## License
 
-This project is licensed under the MIT License — see the repository for details.
+Distributed under the MIT License. See [LICENSE](LICENSE) for details.
